@@ -1,0 +1,30 @@
+name: 每日自動三大法人期貨更新
+
+on:
+  schedule:
+    - cron: '10 7 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-data:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 複製儲存庫檔案
+      uses: actions/checkout@v4.2.2
+    - name: 設定 Python 環境
+      uses: actions/setup-python@v5.1.1
+      with:
+        python-version: '3.10'
+    - name: 安裝套件
+      run: pip install requests pandas
+    - name: 執行爬蟲
+      run: python crawler.py
+    - name: 推回 GitHub
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add index.html
+        git diff --quiet && git diff --staged --quiet || (git commit -m "自動更新數據" && git push)

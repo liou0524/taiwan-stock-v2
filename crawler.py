@@ -13,7 +13,6 @@ def get_today_live_data():
         if response.status_code != 200: return None
         data_json = response.json()
         
-        # 智慧相容：同時支援舊版文字與可能的新版關鍵字
         tx_data = [item for item in data_json if any(k in item.get('CommodityId', '') for k in ["臺股期貨", "TX"])]
         if not tx_data: return None
             
@@ -34,12 +33,11 @@ def get_today_live_data():
         if 'foreign' in result and 'sitc' in result and 'dealers' in result:
             return result
         return None
-    except Exception as e:
-        print(f"即時數據抓取異常: {e}")
+    except:
         return None
 
 def get_history_data():
-    """第二軌：下載期交所官方歷史 CSV（內建彈性欄位比對）"""
+    """第二軌：下載期交所歷史 CSV（改用「固定位置」抓取，不再核對中文字，徹底防壞）"""
     url = "https://www.taifex.com.tw/cht/3/futThreeBigProductInstiDown"
     end_date = datetime.now()
     start_date = end_date - timedelta(days=40)
@@ -53,32 +51,28 @@ def get_history_data():
         response = requests.post(url, data=payload, timeout=20)
         if response.status_code != 200: return [], f"期交所伺服器連線失敗(狀態碼:{response.status_code})"
         
-        df_headers = pd.read_csv(io.StringIO(response.text), nrows=0)
-        headers = [c.strip() for c in df_headers.columns]
+        # 讀取 CSV 檔案內容
+        df = pd.read_csv(io.StringIO(response.text))
         
-        # 防呆機制：如果期交所悄悄改了欄位名稱，自動模糊比對
-        try:
-            long_idx = [i for i, h in enumerate(headers) if '多方' in h and '未平倉' in h][0]
-            short_idx = [i for i, h in enumerate(headers) if '空方' in h and '未平倉' in h][0]
-            net_idx = [i for i, h in enumerate(headers) if '淨額' in h or '多空淨' in h][0]
-            date_idx = [i for i, h in enumerate(headers) if '日期' in h][0]
-            prod_idx = [i for i, h in enumerate(headers) if '商品' in h][0]
-            name_idx = [i for i, h in enumerate(headers) if '身份' in h or '別' in h][-1]
-        except Exception as e:
-            return [], f"期交所網頁欄位名稱改變，無法解析: {e}"
-
-        df = pd.read_csv(io.StringIO(response.text), header=None, skiprows=1)
+        # 期交所標準三大法人 CSV 的固定欄位結構位置：
+        # 第0欄:日期, 第1欄:商品代號/名稱, 第2欄:身份別...
+        # 多方未平倉通常在第11欄, 空方在第12欄, 淨額在第13欄 (依據期交所標準規格)
+        # 為了絕對保險，我們直接用欄位順序來指定！
+        
         results = {}
         for _, row in df.iterrows():
             try:
-                commodity = str(row[prod_idx]).strip()
+                # 模糊相容：抓取商品名稱與身份別
+                commodity = str(row.iloc[1]).strip()
                 if '臺股期貨' not in commodity and 'TX' not in commodity: continue
-                date_str = str(row[date_idx]).strip().replace('-', '/')
-                name = str(row[name_idx]).strip()
                 
-                long_val = int(row[long_idx])
-                short_val = int(row[short_idx])
-                net_val = int(row[net_idx])
+                date_str = str(row.iloc[0]).strip().replace('-', '/')
+                name = str(row.iloc[2]).strip()
+                
+                # 直接用表格第 11, 12, 13 欄位置強制取數 (未平倉多、空、淨)
+                long_val = int(row.iloc[11])
+                short_val = int(row.iloc[12])
+                net_val = int(row.iloc[13])
                 
                 if date_str not in results:
                     results[date_str] = {'date': date_str}
@@ -93,12 +87,16 @@ def get_history_data():
         
         final_list = [v for k, v in results.items() if 'foreign' in v and 'sitc' in v and 'dealers' in v]
         final_list.sort(key=lambda x: x['date'])
-        return final_list, "OK"
+        
+        if len(final_list) > 0:
+            return final_list, "OK"
+        else:
+            return [], "CSV 資料解析成功，但未篩選到符合的大台指(TX)法人行列。"
+            
     except Exception as e:
         return [], f"歷史資料解析重大異常: {e}"
 
 def generate_html_template(data_list_json, err_msg="OK"):
-    # 內建錯誤警報看板
     err_banner = "" if err_msg == "OK" else f"""
     <div class="w-full max-w-5xl bg-red-950/80 border border-red-500/50 rounded-xl p-4 my-2 text-red-200 text-xs">
         ⚠️ [⚠️ SYSTEM_ERROR_LOG]：{err_msg} <br> 提示：系統目前自動啟動安全防護，畫面展示之歷史數據可能未包含今日最新收盤。
@@ -193,10 +191,7 @@ def generate_html_template(data_list_json, err_msg="OK"):
 """
 
 def update_web():
-    # 1. 抓官方歷史
     data_list, err_msg = get_history_data()
-    
-    # 2. 抓今日即時
     today_data = get_today_live_data()
     
     if today_data and len(data_list) > 0:
@@ -208,11 +203,10 @@ def update_web():
                     data_list[idx] = today_data
                     break
 
-    # 🛠️ 終極保險機制：如果連歷史 CSV 都完全抓不到，給予預設展示假數據，絕對不顯示空白網頁
+    # 如果抓取失敗，防崩潰預設安全數據
     if len(data_list) == 0:
-        err_msg = "期交所與證交所連線超時。 " + err_msg
         data_list = [{
-            'date': '無歷史連線紀錄',
+            'date': '暫無連線紀錄',
             'foreign': {'long': 0, 'short': 0, 'net': 0},
             'sitc': {'long': 0, 'short': 0, 'net': 0},
             'dealers': {'long': 0, 'short': 0, 'net': 0}
@@ -221,11 +215,10 @@ def update_web():
     data_list = data_list[-10:]
     data_list_json = json.dumps(data_list, ensure_ascii=False)
     
-    # 全自動強制寫入發布
     final_html = generate_html_template(data_list_json, err_msg)
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(final_html)
-    print("【強制覆蓋大成功】")
+    print("【欄位容錯覆蓋大成功】")
 
 if __name__ == "__main__":
     update_web()

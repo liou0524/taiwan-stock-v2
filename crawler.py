@@ -37,7 +37,7 @@ def get_today_live_data():
         return None
 
 def get_history_data():
-    """第二軌：下載期交所歷史 CSV（改用「固定位置」抓取，不再核對中文字，徹底防壞）"""
+    """第二軌：下載期交所歷史 CSV（改用「身份別」關鍵字地毯式搜捕，不再比對商品名稱）"""
     url = "https://www.taifex.com.tw/cht/3/futThreeBigProductInstiDown"
     end_date = datetime.now()
     start_date = end_date - timedelta(days=40)
@@ -49,41 +49,45 @@ def get_history_data():
     }
     try:
         response = requests.post(url, data=payload, timeout=20)
-        if response.status_code != 200: return [], f"期交所伺服器連線失敗(狀態碼:{response.status_code})"
+        if response.status_code != 200: return [], f"期交所連線失敗({response.status_code})"
         
         # 讀取 CSV 檔案內容
         df = pd.read_csv(io.StringIO(response.text))
         
-        # 期交所標準三大法人 CSV 的固定欄位結構位置：
-        # 第0欄:日期, 第1欄:商品代號/名稱, 第2欄:身份別...
-        # 多方未平倉通常在第11欄, 空方在第12欄, 淨額在第13欄 (依據期交所標準規格)
-        # 為了絕對保險，我們直接用欄位順序來指定！
-        
+        # 為了防止期交所亂換欄位，我們先找出「日期」在哪一欄
+        date_col_idx = 0
+        for idx, col in enumerate(df.columns):
+            if '日期' in str(col):
+                date_col_idx = idx
+                break
+
         results = {}
+        
+        # 逐列檢查，只要這一列包含法人關鍵字，就直接抽取數值！
         for _, row in df.iterrows():
+            row_str = ",".join([str(x) for x in row.values])
+            
+            # 從這列文字中抓取日期
+            date_str = str(row.iloc[date_col_idx]).strip().replace('-', '/')
+            if len(date_str) < 8: continue # 跳過不對的日期列
+            
+            # 自動找數值：期交所表格最後三碼通常是：多方未平倉、空方未平倉、多空淨額
             try:
-                # 模糊相容：抓取商品名稱與身份別
-                commodity = str(row.iloc[1]).strip()
-                if '臺股期貨' not in commodity and 'TX' not in commodity: continue
-                
-                date_str = str(row.iloc[0]).strip().replace('-', '/')
-                name = str(row.iloc[2]).strip()
-                
-                # 直接用表格第 11, 12, 13 欄位置強制取數 (未平倉多、空、淨)
-                long_val = int(row.iloc[11])
-                short_val = int(row.iloc[12])
-                net_val = int(row.iloc[13])
-                
-                if date_str not in results:
-                    results[date_str] = {'date': date_str}
-                if any(k in name for k in ['外資', '陸資']):
-                    results[date_str]['foreign'] = {'long': long_val, 'short': short_val, 'net': net_val}
-                elif '投信' in name:
-                    results[date_str]['sitc'] = {'long': long_val, 'short': short_val, 'net': net_val}
-                elif '自營商' in name:
-                    results[date_str]['dealers'] = {'long': long_val, 'short': short_val, 'net': net_val}
+                long_val = int(row.iloc[-3])
+                short_val = int(row.iloc[-2])
+                net_val = int(row.iloc[-1])
             except:
-                continue
+                continue # 如果最後三欄不是數字就跳過
+                
+            if date_str not in results:
+                results[date_str] = {'date': date_str}
+                
+            if any(k in row_str for k in ['外資', '陸資']):
+                results[date_str]['foreign'] = {'long': long_val, 'short': short_val, 'net': net_val}
+            elif '投信' in row_str:
+                results[date_str]['sitc'] = {'long': long_val, 'short': short_val, 'net': net_val}
+            elif '自營商' in row_str:
+                results[date_str]['dealers'] = {'long': long_val, 'short': short_val, 'net': net_val}
         
         final_list = [v for k, v in results.items() if 'foreign' in v and 'sitc' in v and 'dealers' in v]
         final_list.sort(key=lambda x: x['date'])
@@ -91,15 +95,15 @@ def get_history_data():
         if len(final_list) > 0:
             return final_list, "OK"
         else:
-            return [], "CSV 資料解析成功，但未篩選到符合的大台指(TX)法人行列。"
+            return [], "抓取成功但欄位格式完全不符，請檢查 CSV 欄位內容。"
             
     except Exception as e:
-        return [], f"歷史資料解析重大異常: {e}"
+        return [], f"錯誤解析: {e}"
 
 def generate_html_template(data_list_json, err_msg="OK"):
     err_banner = "" if err_msg == "OK" else f"""
     <div class="w-full max-w-5xl bg-red-950/80 border border-red-500/50 rounded-xl p-4 my-2 text-red-200 text-xs">
-        ⚠️ [⚠️ SYSTEM_ERROR_LOG]：{err_msg} <br> 提示：系統目前自動啟動安全防護，畫面展示之歷史數據可能未包含今日最新收盤。
+        ⚠️ [⚠️ SYSTEM_ERROR_LOG]：{err_msg} <br> 提示：系統自動啟動防護，畫面可能展示前日舊數據。
     </div>"""
     
     return f"""<!DOCTYPE html>
@@ -203,10 +207,10 @@ def update_web():
                     data_list[idx] = today_data
                     break
 
-    # 如果抓取失敗，防崩潰預設安全數據
+    # 保險兜底
     if len(data_list) == 0:
         data_list = [{
-            'date': '暫無連線紀錄',
+            'date': '數據重整中',
             'foreign': {'long': 0, 'short': 0, 'net': 0},
             'sitc': {'long': 0, 'short': 0, 'net': 0},
             'dealers': {'long': 0, 'short': 0, 'net': 0}
@@ -218,7 +222,7 @@ def update_web():
     final_html = generate_html_template(data_list_json, err_msg)
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(final_html)
-    print("【欄位容錯覆蓋大成功】")
+    print("【全數據捕獲成功】")
 
 if __name__ == "__main__":
     update_web()

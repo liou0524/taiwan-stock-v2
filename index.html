@@ -15,7 +15,7 @@
 <body class="bg-[#0b0f19] text-slate-200 min-h-screen p-4 md:p-8 flex flex-col items-center justify-start font-mono">
     
     <div class="w-full max-w-5xl bg-red-950/80 border border-red-500/50 rounded-xl p-4 my-2 text-red-200 text-xs">
-        ⚠️ [⚠️ SYSTEM_ERROR_LOG]：CSV 資料解析成功，但未篩選到符合的大台指(TX)法人行列。 <br> 提示：系統目前自動啟動安全防護，畫面展示之歷史數據可能未包含今日最新收盤。
+        ⚠️ [⚠️ SYSTEM_ERROR_LOG]：抓取成功但欄位格式完全不符，請檢查 CSV 欄位內容。 <br> 提示：系統自動啟動防護，畫面可能展示前日舊數據。
     </div>
     <div class="w-full max-w-5xl bg-[#111827]/80 backdrop-blur-md rounded-2xl p-6 my-2 neon-border">
         <div class="flex justify-between items-center border-b border-cyan-500/30 pb-4 mb-6">
@@ -57,7 +57,7 @@
         </div>
     </div>
     <script>
-        const rawData = [{"date": "暫無連線紀錄", "foreign": {"long": 0, "short": 0, "net": 0}, "sitc": {"long": 0, "short": 0, "net": 0}, "dealers": {"long": 0, "short": 0, "net": 0}}];
+        const rawData = [{"date": "數據重整中", "foreign": {"long": 0, "short": 0, "net": 0}, "sitc": {"long": 0, "short": 0, "net": 0}, "dealers": {"long": 0, "short": 0, "net": 0}}];
         if (rawData.length > 0) {
             const latest = rawData[rawData.length - 1];
             document.getElementById('update-date').innerText = latest.date;
